@@ -1,0 +1,384 @@
+From c6e8a4880c23fb29998f4555aa1c06fb10c683fd Mon Sep 17 00:00:00 2001
+From: Alon Levy <alevy@redhat.com>
+Date: Mon, 12 Aug 2013 15:01:42 +0300
+Subject: [PATCH] server: move three functions to red_channel
+
+Three blocking functions, one was split to leave the display channel
+specific referencing of the DrawablePipeItem being sent inside
+red_worker, but the rest (most) of the timeout logic was moved to
+red_channel, including the associated constants.
+
+Moved functions:
+red_channel_client_wait_pipe_item_sent
+red_wait_outgoing_item
+red_wait_all_sent
+
+Introduces red_time.h & red_time.c for a small helper function dealing
+with time.h
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1004443
+Conflicts:
+	server/red_worker.c
+
+(cherry picked from commit bc50ff07676fa0b15df3aa2ae7e54936a8f81f95)
+---
+ server/red_channel.c | 106 ++++++++++++++++++++++++++++++++++++++++++++
+ server/red_channel.h |  10 +++++
+ server/red_time.c    |   1 +
+ server/red_time.h    |  15 +++++++
+ server/red_worker.c  | 121 +--------------------------------------------------
+ 5 files changed, 134 insertions(+), 119 deletions(-)
+ create mode 100644 server/red_time.c
+ create mode 100644 server/red_time.h
+
+diff --git a/server/red_channel.c b/server/red_channel.c
+index 84516a1..5cc63e3 100644
+--- a/server/red_channel.c
++++ b/server/red_channel.c
+@@ -38,6 +38,7 @@
+ #include "red_channel.h"
+ #include "reds.h"
+ #include "main_dispatcher.h"
++#include "red_time.h"
+ 
+ typedef struct EmptyMsgPipeItem {
+     PipeItem base;
+@@ -47,6 +48,12 @@ typedef struct EmptyMsgPipeItem {
+ #define PING_TEST_TIMEOUT_MS 15000
+ #define PING_TEST_IDLE_NET_TIMEOUT_MS 100
+ 
++#define DETACH_TIMEOUT 15000000000ULL //nano
++#define DETACH_SLEEP_DURATION 10000 //micro
++
++#define CHANNEL_PUSH_TIMEOUT 30000000000ULL //nano
++#define CHANNEL_PUSH_SLEEP_DURATION 10000 //micro
++
+ enum QosPingState {
+     PING_STATE_NONE,
+     PING_STATE_TIMER,
+@@ -2309,3 +2316,102 @@ uint32_t red_channel_sum_pipes_size(RedChannel *channel)
+     }
+     return sum;
+ }
++
++void red_wait_outgoing_item(RedChannelClient *rcc)
++{
++    uint64_t end_time;
++    int blocked;
++
++    if (!red_channel_client_blocked(rcc)) {
++        return;
++    }
++    end_time = red_now() + DETACH_TIMEOUT;
++    spice_info("blocked");
++
++    do {
++        usleep(DETACH_SLEEP_DURATION);
++        red_channel_client_receive(rcc);
++        red_channel_client_send(rcc);
++    } while ((blocked = red_channel_client_blocked(rcc)) && red_now() < end_time);
++
++    if (blocked) {
++        spice_warning("timeout");
++        // TODO - shutting down the socket but we still need to trigger
++        // disconnection. Right now we wait for main channel to error for that.
++        red_channel_client_shutdown(rcc);
++    } else {
++        spice_assert(red_channel_client_no_item_being_sent(rcc));
++    }
++}
++
++/* TODO: more evil sync stuff. anything with the word wait in it's name. */
++void red_channel_client_wait_pipe_item_sent(RedChannelClient *rcc,
++                                            PipeItem *item)
++{
++    uint64_t end_time;
++    int item_in_pipe;
++
++    spice_info(NULL);
++
++    end_time = red_now() + CHANNEL_PUSH_TIMEOUT;
++
++    rcc->channel->channel_cbs.hold_item(rcc, item);
++
++    if (red_channel_client_blocked(rcc)) {
++        red_channel_client_receive(rcc);
++        red_channel_client_send(rcc);
++    }
++    red_channel_client_push(rcc);
++
++    while((item_in_pipe = ring_item_is_linked(&item->link)) && (red_now() < end_time)) {
++        usleep(CHANNEL_PUSH_SLEEP_DURATION);
++        red_channel_client_receive(rcc);
++        red_channel_client_send(rcc);
++        red_channel_client_push(rcc);
++    }
++
++    if (item_in_pipe) {
++        spice_warning("timeout");
++        red_channel_client_disconnect(rcc);
++    } else {
++        red_wait_outgoing_item(rcc);
++    }
++    red_channel_client_release_item(rcc, item, TRUE);
++}
++
++static void rcc_shutdown_if_pending_send(RedChannelClient *rcc)
++{
++    if (red_channel_client_blocked(rcc) || rcc->pipe_size > 0) {
++        red_channel_client_shutdown(rcc);
++    } else {
++        spice_assert(red_channel_client_no_item_being_sent(rcc));
++    }
++}
++
++void red_wait_all_sent(RedChannel *channel)
++{
++    uint64_t end_time;
++    uint32_t max_pipe_size;
++    int blocked = FALSE;
++
++    end_time = red_now() + DETACH_TIMEOUT;
++
++    red_channel_push(channel);
++    while (((max_pipe_size = red_channel_max_pipe_size(channel)) ||
++           (blocked = red_channel_any_blocked(channel))) &&
++           red_now() < end_time) {
++        spice_debug("pipe-size %u blocked %d", max_pipe_size, blocked);
++        usleep(DETACH_SLEEP_DURATION);
++        red_channel_receive(channel);
++        red_channel_send(channel);
++        red_channel_push(channel);
++    }
++
++    if (max_pipe_size || blocked) {
++        spice_printerr("timeout: pending out messages exist (pipe-size %u, blocked %d)",
++                       max_pipe_size, blocked);
++        red_channel_apply_clients(channel, rcc_shutdown_if_pending_send);
++    } else {
++        spice_assert(red_channel_no_item_being_sent(channel));
++    }
++}
+diff --git a/server/red_channel.h b/server/red_channel.h
+index 3b65be1..8fa44f1 100644
+--- a/server/red_channel.h
++++ b/server/red_channel.h
+@@ -612,4 +612,14 @@ int red_client_during_migrate_at_target(RedClient *client);
+ 
+ void red_client_migrate(RedClient *client);
+ 
++/* blocking function */
++void red_channel_client_wait_pipe_item_sent(RedChannelClient *rcc,
++                                            PipeItem *item);
++
++/* blocking function */
++void red_wait_outgoing_item(RedChannelClient *rcc);
++
++/* blocking function */
++void red_wait_all_sent(RedChannel *channel);
++
+ #endif
+diff --git a/server/red_time.c b/server/red_time.c
+new file mode 100644
+index 0000000..8b13789
+--- /dev/null
++++ b/server/red_time.c
+@@ -0,0 +1 @@
++
+diff --git a/server/red_time.h b/server/red_time.h
+new file mode 100644
+index 0000000..ffa97f2
+--- /dev/null
++++ b/server/red_time.h
+@@ -0,0 +1,15 @@
++#ifndef H_RED_TIME
++#define H_RED_TIME
++
++#include <time.h>
++
++static inline uint64_t red_now(void)
++{
++    struct timespec time;
++
++    clock_gettime(CLOCK_MONOTONIC, &time);
++
++    return ((uint64_t) time.tv_sec) * 1000000000 + time.tv_nsec;
++}
++
++#endif
+diff --git a/server/red_worker.c b/server/red_worker.c
+index a4f0663..b3a957e 100644
+--- a/server/red_worker.c
++++ b/server/red_worker.c
+@@ -82,6 +82,7 @@
+ #include "migration_protocol.h"
+ #include "spice_timer_queue.h"
+ #include "main_dispatcher.h"
++#include "red_time.h"
+ 
+ //#define COMPRESS_STAT
+ //#define DUMP_BITMAP
+@@ -97,12 +98,6 @@
+ #define CMD_RING_POLL_TIMEOUT 10 //milli
+ #define CMD_RING_POLL_RETRIES 200
+ 
+-#define DETACH_TIMEOUT 15000000000ULL //nano
+-#define DETACH_SLEEP_DURATION 10000 //micro
+-
+-#define CHANNEL_PUSH_TIMEOUT 30000000000ULL //nano
+-#define CHANNEL_PUSH_SLEEP_DURATION 10000 //micro
+-
+ #define DISPLAY_CLIENT_TIMEOUT 30000000000ULL //nano
+ #define DISPLAY_CLIENT_MIGRATE_DATA_TIMEOUT 10000000000ULL //nano, 10 sec
+ #define DISPLAY_CLIENT_RETRY_INTERVAL 10000 //micro
+@@ -1098,14 +1093,12 @@ static void cursor_channel_client_release_item_before_push(CursorChannelClient *
+                                                            PipeItem *item);
+ static void cursor_channel_client_release_item_after_push(CursorChannelClient *ccc,
+                                                           PipeItem *item);
+-static void red_wait_pipe_item_sent(RedChannelClient *rcc, PipeItem *item);
+ 
+ #ifdef DUMP_BITMAP
+ static void dump_bitmap(RedWorker *worker, SpiceBitmap *bitmap, uint32_t group_id);
+ #endif
+ 
+ static void red_push_monitors_config(DisplayChannelClient *dcc);
+-static inline uint64_t red_now(void);
+ 
+ /*
+  * Macros to make iterating over stuff easier
+@@ -2098,12 +2091,10 @@ static void red_clear_surface_drawables_from_pipe(DisplayChannelClient *dcc, int
+     }
+ 
+     if (item) {
+-        red_wait_pipe_item_sent(&dcc->common.base, item);
++        red_channel_client_wait_pipe_item_sent(&dcc->common.base, item);
+     }
+ }
+ 
+-static void red_wait_outgoing_item(RedChannelClient *rcc);
+-
+ static void red_clear_surface_drawables_from_pipes(RedWorker *worker, int surface_id,
+     int force, int wait_for_outgoing_item)
+ {
+@@ -5088,15 +5079,6 @@ static void qxl_process_cursor(RedWorker *worker, RedCursorCmd *cursor_cmd, uint
+     red_release_cursor(worker, cursor_item);
+ }
+ 
+-static inline uint64_t red_now(void)
+-{
+-    struct timespec time;
+-
+-    clock_gettime(CLOCK_MONOTONIC, &time);
+-
+-    return ((uint64_t) time.tv_sec) * 1000000000 + time.tv_nsec;
+-}
+-
+ static int red_process_cursor(RedWorker *worker, uint32_t max_pipe_size, int *ring_is_empty)
+ {
+     QXLCommandExt ext_cmd;
+@@ -10988,105 +10970,6 @@ typedef struct __attribute__ ((__packed__)) CursorData {
+     SpiceCursor _cursor;
+ } CursorData;
+ 
+-static void red_wait_outgoing_item(RedChannelClient *rcc)
+-{
+-    uint64_t end_time;
+-    int blocked;
+-
+-    if (!red_channel_client_blocked(rcc)) {
+-        return;
+-    }
+-    end_time = red_now() + DETACH_TIMEOUT;
+-    spice_info("blocked");
+-
+-    do {
+-        usleep(DETACH_SLEEP_DURATION);
+-        red_channel_client_receive(rcc);
+-        red_channel_client_send(rcc);
+-    } while ((blocked = red_channel_client_blocked(rcc)) && red_now() < end_time);
+-
+-    if (blocked) {
+-        spice_warning("timeout");
+-        // TODO - shutting down the socket but we still need to trigger
+-        // disconnection. Right now we wait for main channel to error for that.
+-        red_channel_client_shutdown(rcc);
+-    } else {
+-        spice_assert(red_channel_client_no_item_being_sent(rcc));
+-    }
+-}
+-
+-static void rcc_shutdown_if_pending_send(RedChannelClient *rcc)
+-{
+-    if (red_channel_client_blocked(rcc) || rcc->pipe_size > 0) {
+-        red_channel_client_shutdown(rcc);
+-    } else {
+-        spice_assert(red_channel_client_no_item_being_sent(rcc));
+-    }
+-}
+-
+-static void red_wait_all_sent(RedChannel *channel)
+-{
+-    uint64_t end_time;
+-    uint32_t max_pipe_size;
+-    int blocked = FALSE;
+-
+-    end_time = red_now() + DETACH_TIMEOUT;
+-
+-    red_channel_push(channel);
+-    while (((max_pipe_size = red_channel_max_pipe_size(channel)) ||
+-           (blocked = red_channel_any_blocked(channel))) &&
+-           red_now() < end_time) {
+-        spice_debug("pipe-size %u blocked %d", max_pipe_size, blocked);
+-        usleep(DETACH_SLEEP_DURATION);
+-        red_channel_receive(channel);
+-        red_channel_send(channel);
+-        red_channel_push(channel);
+-    }
+-
+-    if (max_pipe_size || blocked) {
+-        spice_printerr("timeout: pending out messages exist (pipe-size %u, blocked %d)",
+-                       max_pipe_size, blocked);
+-        red_channel_apply_clients(channel, rcc_shutdown_if_pending_send);
+-    } else {
+-        spice_assert(red_channel_no_item_being_sent(channel));
+-    }
+-}
+-
+-/* TODO: more evil sync stuff. anything with the word wait in it's name. */
+-static void red_wait_pipe_item_sent(RedChannelClient *rcc, PipeItem *item)
+-{
+-    DrawablePipeItem *dpi;
+-    uint64_t end_time;
+-    int item_in_pipe;
+-
+-    spice_info(NULL);
+-    dpi = SPICE_CONTAINEROF(item, DrawablePipeItem, dpi_pipe_item);
+-    ref_drawable_pipe_item(dpi);
+-
+-    end_time = red_now() + CHANNEL_PUSH_TIMEOUT;
+-
+-    if (red_channel_client_blocked(rcc)) {
+-        red_channel_client_receive(rcc);
+-        red_channel_client_send(rcc);
+-    }
+-    red_channel_client_push(rcc);
+-
+-    while((item_in_pipe = ring_item_is_linked(&item->link)) && (red_now() < end_time)) {
+-        usleep(CHANNEL_PUSH_SLEEP_DURATION);
+-        red_channel_client_receive(rcc);
+-        red_channel_client_send(rcc);
+-        red_channel_client_push(rcc);
+-    }
+-
+-    if (item_in_pipe) {
+-        spice_warning("timeout");
+-        red_channel_client_disconnect(rcc);
+-    } else {
+-        red_wait_outgoing_item(rcc);
+-    }
+-    put_drawable_pipe_item(dpi);
+-}
+-
+ static void surface_dirty_region_to_rects(RedSurface *surface,
+                                           QXLRect *qxl_dirty_rects,
+                                           uint32_t num_dirty_rects,

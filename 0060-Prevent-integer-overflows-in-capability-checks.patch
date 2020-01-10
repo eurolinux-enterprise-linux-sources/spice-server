@@ -1,0 +1,40 @@
+From 665f7dddd2d534500d3b3e3e1f8135c49479ad25 Mon Sep 17 00:00:00 2001
+From: Frediano Ziglio <fziglio@redhat.com>
+Date: Mon, 28 Nov 2016 13:15:58 +0000
+Subject: [PATCH] Prevent integer overflows in capability checks
+
+The limits for capabilities are specified using 32 bit unsigned integers.
+This could cause possible integer overflows causing buffer overflows.
+For instance the sum of num_common_caps and num_caps can be 0 avoiding
+additional checks.
+As the link message is now capped to 4096 and the capabilities are
+contained in the link message, this commit limits the capabilities
+to 1024 (capabilities are expressed in number of uint32_t items).
+
+Signed-off-by: Frediano Ziglio <fziglio@redhat.com>
+---
+ server/reds.c | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/server/reds.c b/server/reds.c
+index 64f07cc..f5542f6 100644
+--- a/server/reds.c
++++ b/server/reds.c
+@@ -2699,6 +2699,14 @@ static void reds_handle_read_link_done(void *opaque)
+     uint32_t *caps = (uint32_t *)((uint8_t *)link_mess + link_mess->caps_offset);
+     int auth_selection;
+ 
++    /* Prevent integer overflows. Currently we defined only 13 capabilities,
++     * I expect 1024 to be valid for quite a lot time */
++    if (link_mess->num_channel_caps > 1024 || link_mess->num_common_caps > 1024) {
++        reds_send_link_error(link, SPICE_LINK_ERR_INVALID_DATA);
++        reds_link_free(link);
++        return;
++    }
++
+     if (num_caps && (num_caps * sizeof(uint32_t) + link_mess->caps_offset >
+                      link->link_header.size ||
+                      link_mess->caps_offset < sizeof(*link_mess))) {
+-- 
+2.9.3
+

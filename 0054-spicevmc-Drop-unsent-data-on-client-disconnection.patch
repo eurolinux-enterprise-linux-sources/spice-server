@@ -1,0 +1,69 @@
+From 5ae5b34ee99fe719a47719f740b244cdd342c157 Mon Sep 17 00:00:00 2001
+From: Christophe Fergeau <cfergeau@redhat.com>
+Date: Tue, 29 Sep 2015 11:33:04 +0200
+Subject: [PATCH] spicevmc: Drop unsent data on client disconnection
+
+When redirecting a USB webcam over a slow link, it's currently possible
+to hit an assertion in spice-server by running cheese (application using
+the webcam), killing the client with ctrl+c and then restarting the
+client:
+qemu-kvm: spicevmc.c:324: spicevmc_red_channel_alloc_msg_rcv_buf:
+Assertion `!state->recv_from_client_buf' failed.
+
+This happens when red_peer_handle_incoming tries to allocate memory for
+a message using spicevmc:
+handler->msg = handler->cb->alloc_msg_buf(handler->opaque, msg_type,
+msg_size);
+
+red_peer_handle_incoming() is called when there is client data to be
+read, and does
+- call alloc_msg_buf() to allocate memory for the message
+- read the message
+- if the read was partial, return early, the main loop will call again
+  red_peer_handle_incoming() when there is more data available for that
+  channel
+- parse the message
+- call release_msg_buf() to free the message
+
+For channels based on spicevmc (usbredir and port), alloc_msg_buf()
+stores message data in SpiceVmcState::recv_from_client_buf and before
+allocating new memory, it asserts that it's NULL.
+
+This is what causes this crash in the following scenario:
+- SpiceVmc::alloc_msg_buf() is called and allocates memory for a new
+  message in SpiceVmcState::recv_from_client_buf
+- red_peer_handle_incoming() returns early as all the spicevmc message
+  data hasn't been received yet
+- the client gets killed
+- the main channel notices the disconnect and calls
+  main_dispatcher_client_disconnect() which will disconnect all the
+  channels
+- SpiceVmc::on_disconnect is called
+- after the new client connects, SpiceVmc::alloc_msg_buf() is called,
+  notices that SpiceVmcState::recv_from_client_buf is already set, and
+  asserts()
+
+This commit makes sure the partial SpiceVmcState::recv_from_client_buf
+data is cleared on disconnect so that the assert does not trigger.
+
+This fixes https://bugzilla.redhat.com/show_bug.cgi?id=1264113
+---
+ server/spicevmc.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/server/spicevmc.c b/server/spicevmc.c
+index e10f183..80f3aeb 100644
+--- a/server/spicevmc.c
++++ b/server/spicevmc.c
+@@ -223,6 +223,11 @@ static void spicevmc_red_channel_client_on_disconnect(RedChannelClient *rcc)
+     sin = state->chardev_sin;
+     sif = SPICE_CONTAINEROF(sin->base.sif, SpiceCharDeviceInterface, base);
+ 
++    if (state->recv_from_client_buf) { /* partial message which wasn't pushed to device */
++        spice_char_device_write_buffer_release(state->chardev_st, state->recv_from_client_buf);
++        state->recv_from_client_buf = NULL;
++    }
++
+     if (state->chardev_st) {
+         if (spice_char_device_client_exists(state->chardev_st, rcc->client)) {
+             spice_char_device_client_remove(state->chardev_st, rcc->client);

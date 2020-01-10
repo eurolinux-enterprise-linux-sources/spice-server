@@ -1,0 +1,41 @@
+From 4594b43f19a7de97e496682fdfb5d41aa7bfb8a8 Mon Sep 17 00:00:00 2001
+From: Frediano Ziglio <fziglio@redhat.com>
+Date: Tue, 8 Sep 2015 13:06:03 +0100
+Subject: [PATCH 42/53] Fix some possible overflows in red_get_string for 32
+ bit
+
+Signed-off-by: Frediano Ziglio <fziglio@redhat.com>
+Acked-by: Christophe Fergeau <cfergeau@redhat.com>
+---
+ server/red_parse_qxl.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/server/red_parse_qxl.c b/server/red_parse_qxl.c
+index f183248..668ce10 100644
+--- a/server/red_parse_qxl.c
++++ b/server/red_parse_qxl.c
+@@ -895,6 +895,11 @@ static SpiceString *red_get_string(RedMemSlotInfo *slots, int group_id,
+         glyphs++;
+         glyph_size = start->height * ((start->width * bpp + 7u) / 8u);
+         red_size += sizeof(SpiceRasterGlyph *) + SPICE_ALIGN(sizeof(SpiceRasterGlyph) + glyph_size, 4);
++        /* do the test correctly, we know end - start->data[0] cannot
++         * overflow, don't use start->data[glyph_size] to test for
++         * buffer overflow as this on 32 bit can cause overflow
++         * on the pointer arithmetic */
++        spice_assert(glyph_size <= (char*) end - (char*) &start->data[0]);
+         start = (QXLRasterGlyph*)(&start->data[glyph_size]);
+     }
+     spice_assert(start <= end);
+@@ -915,7 +920,8 @@ static SpiceString *red_get_string(RedMemSlotInfo *slots, int group_id,
+         red_get_point_ptr(&glyph->render_pos, &start->render_pos);
+         red_get_point_ptr(&glyph->glyph_origin, &start->glyph_origin);
+         glyph_size = glyph->height * ((glyph->width * bpp + 7u) / 8u);
+-        spice_assert((QXLRasterGlyph*)(&start->data[glyph_size]) <= end);
++        /* see above for similar test */
++        spice_assert(glyph_size <= (char*) end - (char*) &start->data[0]);
+         memcpy(glyph->data, start->data, glyph_size);
+         start = (QXLRasterGlyph*)(&start->data[glyph_size]);
+         glyph = (SpiceRasterGlyph*)
+-- 
+2.4.3
+

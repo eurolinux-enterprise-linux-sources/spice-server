@@ -1,0 +1,45 @@
+From 7e9bd9164a4eb2aae7be77dadc5e790f4b64d074 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?David=20Ja=C5=A1a?= <djasa@redhat.com>
+Date: Wed, 27 Nov 2013 17:45:49 +0100
+Subject: [PATCH] Use TLS version 1.0 or better
+
+When creating a TLS socket, both spice-server and spice-gtk currently
+call SSL_CTX_new(TLSv1_method()). The TLSv1_method() function set the
+protocol version to TLS 1.0 exclusively. The correct way to support
+multiple protocol versions is to call SSLv23_method() in spite of its
+scary name. This method will enable all SSL/TLS protocol versions. The
+protocol suite may be further narrowed down by setting respective
+SSL_OP_NO_<version_code> options of SSL context.  This possibility is
+used in this patch in order to block use of SSLv3 that is enabled by
+default in openssl for client sockets as of now but spice has never used
+it.
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1035695
+(cherry picked from commit 4fc9ba5f27dd4c04441d38c893ee962da01baf80)
+---
+ server/reds.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/server/reds.c b/server/reds.c
+index 7b7f262..64f07cc 100644
+--- a/server/reds.c
++++ b/server/reds.c
+@@ -3227,6 +3227,8 @@ static int reds_init_ssl(void)
+     SSL_METHOD *ssl_method;
+ #endif
+     int return_code;
++    /* When some other SSL/TLS version becomes obsolete, add it to this
++     * variable. */
+     long ssl_options = SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3;
+ 
+     /* Global system initialization*/
+@@ -3234,7 +3236,8 @@ static int reds_init_ssl(void)
+     SSL_load_error_strings();
+ 
+     /* Create our context*/
+-    ssl_method = TLSv1_method();
++    /* SSLv23_method() handles TLSv1.x in addition to SSLv2/v3 */
++    ssl_method = SSLv23_method();
+     reds->ctx = SSL_CTX_new(ssl_method);
+     if (!reds->ctx) {
+         spice_warning("Could not allocate new SSL context");

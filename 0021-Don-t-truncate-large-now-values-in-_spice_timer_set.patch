@@ -1,0 +1,78 @@
+From 78c3c6201f643f7b38b506a50c4f03db41bab9cb Mon Sep 17 00:00:00 2001
+From: David Gibson <dgibson@redhat.com>
+Date: Mon, 10 Mar 2014 11:55:47 +0100
+Subject: [PATCH] Don't truncate large 'now' values in _spice_timer_set
+
+static void _spice_timer_set(SpiceTimer *timer, uint32_t ms, uint32_t now)
+
+The _spice_timer_set() function takes a 32-bit integer for the "now" value.
+The now value passed in however, can exceed 2^32 (it's in ms and derived
+from CLOCK_MONOTONIC, which will wrap around a 32-bit integer in around 46
+days).
+
+If the now value passed in exceeds 2^32, this will mean timers are inserted
+into the active list with expiry values before the current time, they will
+immediately trigger, and (if they don't make themselves inactive) be
+reinserted still before the current time.
+
+This leads to an infinite loop in spice_timer_queue_cb().
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1072700
+(cherry picked from commit 4019a8801d7a67035749562c0c1f403c24f36b0b)
+---
+ server/spice_timer_queue.c | 13 +++++++------
+ 1 file changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/server/spice_timer_queue.c b/server/spice_timer_queue.c
+index 8f6e9c8..71de84a 100644
+--- a/server/spice_timer_queue.c
++++ b/server/spice_timer_queue.c
+@@ -147,7 +147,7 @@ SpiceTimer *spice_timer_queue_add(SpiceTimerFunc func, void *opaque)
+     return timer;
+ }
+ 
+-static void _spice_timer_set(SpiceTimer *timer, uint32_t ms, uint32_t now)
++static void _spice_timer_set(SpiceTimer *timer, uint32_t ms, uint64_t now)
+ {
+     RingItem *next_item;
+     SpiceTimerQueue *queue;
+@@ -183,7 +183,8 @@ void spice_timer_set(SpiceTimer *timer, uint32_t ms)
+     spice_assert(pthread_equal(timer->queue->thread, pthread_self()) != 0);
+ 
+     clock_gettime(CLOCK_MONOTONIC, &now);
+-    _spice_timer_set(timer, ms, now.tv_sec * 1000 + (now.tv_nsec / 1000 / 1000));
++    _spice_timer_set(timer, ms,
++                     (uint64_t)now.tv_sec * 1000 + (now.tv_nsec / 1000 / 1000));
+ }
+ 
+ void spice_timer_cancel(SpiceTimer *timer)
+@@ -217,7 +218,7 @@ void spice_timer_remove(SpiceTimer *timer)
+ unsigned int spice_timer_queue_get_timeout_ms(void)
+ {
+     struct timespec now;
+-    int now_ms;
++    int64_t now_ms;
+     RingItem *head;
+     SpiceTimer *head_timer;
+     SpiceTimerQueue *queue = spice_timer_queue_find_with_lock();
+@@ -232,9 +233,9 @@ unsigned int spice_timer_queue_get_timeout_ms(void)
+     head_timer = SPICE_CONTAINEROF(head, SpiceTimer, active_link);
+ 
+     clock_gettime(CLOCK_MONOTONIC, &now);
+-    now_ms = (now.tv_sec * 1000) - (now.tv_nsec / 1000 / 1000);
++    now_ms = ((int64_t)now.tv_sec * 1000) - (now.tv_nsec / 1000 / 1000);
+ 
+-    return MAX(0, ((int)head_timer->expiry_time - now_ms));
++    return MAX(0, ((int64_t)head_timer->expiry_time - now_ms));
+ }
+ 
+ 
+@@ -252,7 +253,7 @@ void spice_timer_queue_cb(void)
+     }
+ 
+     clock_gettime(CLOCK_MONOTONIC, &now);
+-    now_ms = (now.tv_sec * 1000) + (now.tv_nsec / 1000 / 1000);
++    now_ms = ((uint64_t)now.tv_sec * 1000) + (now.tv_nsec / 1000 / 1000);
+ 
+     while ((head = ring_get_head(&queue->active_timers))) {
+         SpiceTimer *timer = SPICE_CONTAINEROF(head, SpiceTimer, active_link);

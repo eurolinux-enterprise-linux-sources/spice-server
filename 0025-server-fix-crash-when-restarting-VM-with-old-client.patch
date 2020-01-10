@@ -1,0 +1,71 @@
+From 0b7065fd80042179b7daed693ce796ecb89768cb Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marc-Andr=C3=A9=20Lureau?= <marcandre.lureau@gmail.com>
+Date: Thu, 9 Oct 2014 17:23:06 +0200
+Subject: [PATCH] server: fix crash when restarting VM with old client
+
+The server will reset the vdagent char device when the client does not
+implement SPICE_MAIN_CAP_AGENT_CONNECTED_TOKENS. This will nullify
+dev->sin and the following crash will be reached on restart:
+
+ #0  0x00007fb05aa264a1 in spice_char_device_write_to_device (dev=dev@entry=0x7fb066ae5d30) at char_device.c:443
+ #1  0x00007fb05aa27137 in spice_char_device_write_to_device (dev=0x7fb066ae5d30) at char_device.c:436
+ #2  spice_char_device_start (dev=0x7fb066ae5d30) at char_device.c:798
+ #3  0x00007fb05aa6a981 in spice_server_vm_start (s=<optimized out>) at reds.c:3795
+ #4  0x00007fb0644b7f89 in qdev_reset_one (dev=<optimized out>, opaque=<optimized out>) at hw/core/qdev.c:241
+ #5  0x00007fb0644b7918 in qbus_walk_children (bus=0x7fb06661e870, pre_devfn=0x0, pre_busfn=0x0,
+     post_devfn=0x7fb0644b7f80 <qdev_reset_one>, post_busfn=0x7fb0644b6350 <qbus_reset_one>, opaque=0x0)
+     at hw/core/qdev.c:422
+ #6  0x00007fb0644b7848 in qdev_walk_children (dev=0x7fb0665f47a0, pre_devfn=0x0, pre_busfn=0x0,
+     post_devfn=0x7fb0644b7f80 <qdev_reset_one>, post_busfn=0x7fb0644b6350 <qbus_reset_one>, opaque=0x0)
+     at hw/core/qdev.c:456
+ #7  0x00007fb0644b7918 in qbus_walk_children (bus=0x7fb06647cde0, pre_devfn=0x0, pre_busfn=0x0,
+     post_devfn=0x7fb0644b7f80 <qdev_reset_one>, post_busfn=0x7fb0644b6350 <qbus_reset_one>, opaque=0x0)
+     at hw/core/qdev.c:422
+ #8  0x00007fb0644399fd in qemu_devices_reset () at vl.c:1830
+
+After restart, qemu will reset the device instance (sin) when virtio
+port is opened:
+
+ #0  spice_char_device_state_reset_dev_instance (state=0x7fe4873876d0, sin=sin@entry=0x7fe486fb0c68)
+     at char_device.c:667
+ #1  0x00007fe47b277516 in attach_to_red_agent (sin=0x7fe486fb0c68) at reds.c:2838
+ #2  spice_server_char_device_add_interface (sin=0x7fe486fb0c68, s=0x7fe486fb2e60) at reds.c:2962
+ #3  spice_server_add_interface (s=0x7fe486fb2e60, sin=0x7fe486fb0c68) at reds.c:3104
+ #4  0x00007fe484c69e57 in vmc_register_interface (scd=0x7fe486fb0c60) at spice-qemu-char.c:123
+ #5  0x00007fe484ce96b4 in set_guest_connected (port=<optimized out>, guest_connected=1)
+     at hw/char/virtio-console.c:89
+ #6  0x00007fe484ba70ed in handle_control_message (len=8, buf=0x7fe486fbdf70, vser=0x7fe48739ae98)
+     at /usr/src/debug/qemu-2.1.0/hw/char/virtio-serial-bus.c:382
+
+Let's ignore the call to spice_char_device_{write,read}_to_device() when
+dev->sin is NULL, similary to other conditions, such as dev->running.
+
+Fixes: https://bugzilla.redhat.com/show_bug.cgi?id=1145919
+Fixes: https://bugzilla.redhat.com/show_bug.cgi?id=1163480
+(cherry picked from commit 4639817f0eb26316894cc83b43a736bdd72f9018)
+---
+ server/char_device.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/server/char_device.c b/server/char_device.c
+index 660a788..6d2339e 100644
+--- a/server/char_device.c
++++ b/server/char_device.c
+@@ -283,7 +283,7 @@ static int spice_char_device_read_from_device(SpiceCharDeviceState *dev)
+     uint64_t max_send_tokens;
+     int did_read = FALSE;
+ 
+-    if (!dev->running || dev->wait_for_migrate_data) {
++    if (!dev->running || dev->wait_for_migrate_data || !dev->sin) {
+         return FALSE;
+     }
+ 
+@@ -433,7 +433,7 @@ static int spice_char_device_write_to_device(SpiceCharDeviceState *dev)
+     int total = 0;
+     int n;
+ 
+-    if (!dev->running || dev->wait_for_migrate_data) {
++    if (!dev->running || dev->wait_for_migrate_data || !dev->sin) {
+         return 0;
+     }
+ 

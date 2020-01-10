@@ -1,0 +1,94 @@
+From a81548b012c1b06cb640ed6a48d9b4a2aeda0200 Mon Sep 17 00:00:00 2001
+From: Yonit Halperin <yhalperi@redhat.com>
+Date: Wed, 11 Sep 2013 13:39:35 -0400
+Subject: [PATCH] red_worker: cleanup red_clear_surface_drawables_from_pipes
+
+(1) merge 'force' and 'wait_for_outgoing_item' to one parameter.
+    'wait_for_outgoing_item' is a derivative of 'force'.
+(2) move the call to red_wait_outgoing_item to red_clear_surface_drawables_from_pipe
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1004443
+(cherry picked from commit 6c2ff9864d32199424245b3ca41c201aa2f387b3)
+---
+ server/red_worker.c | 30 ++++++++++++++++++------------
+ 1 file changed, 18 insertions(+), 12 deletions(-)
+
+diff --git a/server/red_worker.c b/server/red_worker.c
+index b93796c..f2c9220 100644
+--- a/server/red_worker.c
++++ b/server/red_worker.c
+@@ -2032,7 +2032,7 @@ static void red_current_clear(RedWorker *worker, int surface_id)
+ }
+ 
+ static void red_clear_surface_drawables_from_pipe(DisplayChannelClient *dcc, int surface_id,
+-                                                  int force)
++                                                  int wait_if_used)
+ {
+     Ring *ring;
+     PipeItem *item;
+@@ -2082,7 +2082,7 @@ static void red_clear_surface_drawables_from_pipe(DisplayChannelClient *dcc, int
+ 
+         if (depend_found) {
+             spice_debug("surface %d dependent item found %p, %p", surface_id, drawable, item);
+-            if (force) {
++            if (wait_if_used) {
+                 break;
+             } else {
+                 return;
+@@ -2090,24 +2090,30 @@ static void red_clear_surface_drawables_from_pipe(DisplayChannelClient *dcc, int
+         }
+     }
+ 
++    if (!wait_if_used) {
++        return;
++    }
++
+     if (item) {
+         red_channel_client_wait_pipe_item_sent(&dcc->common.base, item);
++    } else {
++        /*
++         * in case that the pipe didn't contain any item that is dependent on the surface, but
++         * there is one during sending.
++         */
++        red_wait_outgoing_item(&dcc->common.base);
+     }
+ }
+ 
+-static void red_clear_surface_drawables_from_pipes(RedWorker *worker, int surface_id,
+-    int force, int wait_for_outgoing_item)
++static void red_clear_surface_drawables_from_pipes(RedWorker *worker,
++                                                   int surface_id,
++                                                   int wait_if_used)
+ {
+     RingItem *item, *next;
+     DisplayChannelClient *dcc;
+ 
+     WORKER_FOREACH_DCC_SAFE(worker, item, next, dcc) {
+-        red_clear_surface_drawables_from_pipe(dcc, surface_id, force);
+-        if (wait_for_outgoing_item) {
+-            // in case that the pipe didn't contain any item that is dependent on the surface, but
+-            // there is one during sending.
+-            red_wait_outgoing_item(&dcc->common.base);
+-        }
++        red_clear_surface_drawables_from_pipe(dcc, surface_id, wait_if_used);
+     }
+ }
+ 
+@@ -4292,7 +4298,7 @@ static inline void red_process_surface(RedWorker *worker, RedSurfaceCmd *surface
+            otherwise "current" will hold items that other drawables may depend on, and then
+            red_current_clear will remove them from the pipe. */
+         red_current_clear(worker, surface_id);
+-        red_clear_surface_drawables_from_pipes(worker, surface_id, FALSE, FALSE);
++        red_clear_surface_drawables_from_pipes(worker, surface_id, FALSE);
+         red_destroy_surface(worker, surface_id);
+         break;
+     default:
+@@ -11099,7 +11105,7 @@ static inline void destroy_surface_wait(RedWorker *worker, int surface_id)
+        otherwise "current" will hold items that other drawables may depend on, and then
+        red_current_clear will remove them from the pipe. */
+     red_current_clear(worker, surface_id);
+-    red_clear_surface_drawables_from_pipes(worker, surface_id, TRUE, TRUE);
++    red_clear_surface_drawables_from_pipes(worker, surface_id, TRUE);
+ }
+ 
+ static void dev_destroy_surface_wait(RedWorker *worker, uint32_t surface_id)

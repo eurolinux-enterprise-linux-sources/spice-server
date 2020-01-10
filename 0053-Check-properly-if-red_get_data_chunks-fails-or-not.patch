@@ -1,0 +1,110 @@
+From 107a14aeef978e7c72d8449a89d9f3f2dd8981fb Mon Sep 17 00:00:00 2001
+From: Frediano Ziglio <fziglio@redhat.com>
+Date: Wed, 23 Sep 2015 15:35:19 +0100
+Subject: [PATCH 53/53] Check properly if red_get_data_chunks fails or not
+
+Signed-off-by: Frediano Ziglio <fziglio@redhat.com>
+---
+ server/red_parse_qxl.c | 23 +++++++++++++++--------
+ 1 file changed, 15 insertions(+), 8 deletions(-)
+
+diff --git a/server/red_parse_qxl.c b/server/red_parse_qxl.c
+index 77b66e0..e52f2d9 100644
+--- a/server/red_parse_qxl.c
++++ b/server/red_parse_qxl.c
+@@ -44,6 +44,8 @@ G_STATIC_ASSERT(MAX_DATA_CHUNK <= G_MAXINT32);
+  */
+ #define MAX_CHUNKS (MAX_DATA_CHUNK/1024u)
+ 
++#define INVALID_SIZE ((size_t) -1)
++
+ #if 0
+ static void hexdump_qxl(RedMemSlotInfo *slots, int group_id,
+                         QXLPHYSICAL addr, uint8_t bytes)
+@@ -119,7 +121,7 @@ static size_t red_get_data_chunks_ptr(RedMemSlotInfo *slots, int group_id,
+     red->prev_chunk = red->next_chunk = NULL;
+     if (!validate_virt(slots, (intptr_t)red->data, memslot_id, red->data_size, group_id)) {
+         red->data = NULL;
+-        return 0;
++        return INVALID_SIZE;
+     }
+ 
+     while ((next_chunk = qxl->next_chunk) != 0) {
+@@ -176,7 +178,7 @@ error:
+     red->data_size = 0;
+     red->next_chunk = NULL;
+     red->data = NULL;
+-    return 0;
++    return INVALID_SIZE;
+ }
+ 
+ static size_t red_get_data_chunks(RedMemSlotInfo *slots, int group_id,
+@@ -188,7 +190,7 @@ static size_t red_get_data_chunks(RedMemSlotInfo *slots, int group_id,
+ 
+     qxl = (QXLDataChunk *)get_virt(slots, addr, sizeof(*qxl), group_id, &error);
+     if (error) {
+-        return 0;
++        return INVALID_SIZE;
+     }
+     return red_get_data_chunks_ptr(slots, group_id, memslot_id, red, qxl);
+ }
+@@ -249,7 +251,7 @@ static SpicePath *red_get_path(RedMemSlotInfo *slots, int group_id,
+     size = red_get_data_chunks_ptr(slots, group_id,
+                                    get_memslot_id(slots, addr),
+                                    &chunks, &qxl->chunk);
+-    if (size == 0) {
++    if (size == INVALID_SIZE) {
+         return NULL;
+     }
+     data = red_linearize_chunk(&chunks, size, &free_data);
+@@ -328,6 +330,9 @@ static SpiceClipRects *red_get_clip_rects(RedMemSlotInfo *slots, int group_id,
+     size = red_get_data_chunks_ptr(slots, group_id,
+                                    get_memslot_id(slots, addr),
+                                    &chunks, &qxl->chunk);
++    if (size == INVALID_SIZE) {
++        return NULL;
++    }
+     data = red_linearize_chunk(&chunks, size, &free_data);
+     red_put_data_chunks(&chunks);
+ 
+@@ -535,7 +540,7 @@ static SpiceImage *red_get_image(RedMemSlotInfo *slots, int group_id,
+             size = red_get_data_chunks(slots, group_id,
+                                        &chunks, qxl->bitmap.data);
+             spice_assert(size == bitmap_size);
+-            if (size != bitmap_size) {
++            if (size == INVALID_SIZE || size != bitmap_size) {
+                 red_put_data_chunks(&chunks);
+                 goto error;
+             }
+@@ -556,7 +561,7 @@ static SpiceImage *red_get_image(RedMemSlotInfo *slots, int group_id,
+                                        get_memslot_id(slots, addr),
+                                        &chunks, (QXLDataChunk *)qxl->quic.data);
+         spice_assert(size == red->u.quic.data_size);
+-        if (size != red->u.quic.data_size) {
++        if (size == INVALID_SIZE || size != red->u.quic.data_size) {
+             red_put_data_chunks(&chunks);
+             goto error;
+         }
+@@ -873,8 +878,7 @@ static SpiceString *red_get_string(RedMemSlotInfo *slots, int group_id,
+     chunk_size = red_get_data_chunks_ptr(slots, group_id,
+                                          get_memslot_id(slots, addr),
+                                          &chunks, &qxl->chunk);
+-    if (!chunk_size) {
+-        /* XXX could be a zero sized string.. */
++    if (chunk_size == INVALID_SIZE) {
+         return NULL;
+     }
+     data = red_linearize_chunk(&chunks, chunk_size, &free_data);
+@@ -1399,6 +1403,9 @@ static int red_get_cursor(RedMemSlotInfo *slots, int group_id,
+     size = red_get_data_chunks_ptr(slots, group_id,
+                                    get_memslot_id(slots, addr),
+                                    &chunks, &qxl->chunk);
++    if (size == INVALID_SIZE) {
++        return 1;
++    }
+     red->data_size = MIN(red->data_size, size);
+     data = red_linearize_chunk(&chunks, size, &free_data);
+     red_put_data_chunks(&chunks);
+-- 
+2.4.3
+

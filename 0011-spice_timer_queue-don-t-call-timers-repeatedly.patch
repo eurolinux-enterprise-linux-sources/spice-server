@@ -1,0 +1,32 @@
+From 5eb1631e32a59e10b9c2b6abab253603b6f448fa Mon Sep 17 00:00:00 2001
+From: Yonit Halperin <yhalperi@redhat.com>
+Date: Tue, 13 Aug 2013 15:40:16 -0400
+Subject: [PATCH] spice_timer_queue: don't call timers repeatedly
+
+For channels that don't run as part of the main loop, we use
+spice_timer_queue, while for the other channels we use
+qemu timers support. The callbacks for setting timers are supplied to
+red_channel via SpiceCoreInterface, and their behavior should be
+consistent. qemu timers are called only once per each call to
+timer_start. This patch assigns the same behaviour to spice_timer_queue.
+
+(cherry picked from commit c1c08c289883455f025836f14eda7bfd86442ed7)
+---
+ server/spice_timer_queue.c | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/server/spice_timer_queue.c b/server/spice_timer_queue.c
+index 833ab1d..8f6e9c8 100644
+--- a/server/spice_timer_queue.c
++++ b/server/spice_timer_queue.c
+@@ -261,9 +261,7 @@ void spice_timer_queue_cb(void)
+             break;
+         } else {
+             timer->func(timer->opaque);
+-            if (timer->is_active) {
+-                _spice_timer_set(timer, timer->ms, now_ms);
+-            }
++            spice_timer_cancel(timer);
+         }
+     }
+ }

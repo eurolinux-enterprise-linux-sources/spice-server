@@ -1,0 +1,48 @@
+From 50d9ff43e56989611032fb3da4238487ef87ad8d Mon Sep 17 00:00:00 2001
+From: Frediano Ziglio <fziglio@redhat.com>
+Date: Tue, 8 Sep 2015 13:09:35 +0100
+Subject: [PATCH 34/53] Prevent 32 bit integer overflow in bitmap_consistent
+
+The overflow may lead to buffer overflow as the row size computed from
+width (bitmap->x) can be bigger than the size in bytes (bitmap->stride).
+This can make spice-server accept the invalid sizes.
+
+Signed-off-by: Frediano Ziglio <fziglio@redhat.com>
+Acked-by: Christophe Fergeau <cfergeau@redhat.com>
+---
+ server/red_parse_qxl.c | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/server/red_parse_qxl.c b/server/red_parse_qxl.c
+index 01cba0f..3385f52 100644
+--- a/server/red_parse_qxl.c
++++ b/server/red_parse_qxl.c
+@@ -357,11 +357,12 @@ static const char *bitmap_format_to_string(int format)
+     return "unknown";
+ }
+ 
+-static const int MAP_BITMAP_FMT_TO_BITS_PER_PIXEL[] = {0, 1, 1, 4, 4, 8, 16, 24, 32, 32, 8};
++static const unsigned int MAP_BITMAP_FMT_TO_BITS_PER_PIXEL[] =
++    {0, 1, 1, 4, 4, 8, 16, 24, 32, 32, 8};
+ 
+ static int bitmap_consistent(SpiceBitmap *bitmap)
+ {
+-    int bpp;
++    unsigned int bpp;
+ 
+     if (bitmap->format >= SPICE_N_ELEMENTS(MAP_BITMAP_FMT_TO_BITS_PER_PIXEL)) {
+         spice_warning("wrong format specified for image\n");
+@@ -370,8 +371,8 @@ static int bitmap_consistent(SpiceBitmap *bitmap)
+ 
+     bpp = MAP_BITMAP_FMT_TO_BITS_PER_PIXEL[bitmap->format];
+ 
+-    if (bitmap->stride < ((bitmap->x * bpp + 7) / 8)) {
+-        spice_error("image stride too small for width: %d < ((%d * %d + 7) / 8) (%s=%d)\n",
++    if (bitmap->stride < (((uint64_t) bitmap->x * bpp + 7u) / 8u)) {
++        spice_warning("image stride too small for width: %d < ((%d * %d + 7) / 8) (%s=%d)\n",
+                     bitmap->stride, bitmap->x, bpp,
+                     bitmap_format_to_string(bitmap->format),
+                     bitmap->format);
+-- 
+2.4.3
+

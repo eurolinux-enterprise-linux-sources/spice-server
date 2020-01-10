@@ -1,0 +1,117 @@
+From 452ea3dbc4e9c81be32d78102ca0fbf9f3ef0692 Mon Sep 17 00:00:00 2001
+From: Yonit Halperin <yhalperi@redhat.com>
+Date: Wed, 14 Aug 2013 10:56:44 -0400
+Subject: [PATCH] main_channel: monitoring client connection status
+
+rhbz#994175
+
+Start monitoring if the client connection is alive after completing
+the bit-rate test.
+
+(cherry picked from commit ed1f70c6d16ff55adf73a08f063f5d7955f4c488)
+---
+ server/main_channel.c | 27 +++++++++++++++++++++------
+ server/main_channel.h |  2 +-
+ server/reds.c         |  3 +--
+ 3 files changed, 23 insertions(+), 9 deletions(-)
+
+diff --git a/server/main_channel.c b/server/main_channel.c
+index fe032a6..54718ba 100644
+--- a/server/main_channel.c
++++ b/server/main_channel.c
+@@ -55,6 +55,8 @@
+ 
+ #define PING_INTERVAL (1000 * 10)
+ 
++#define CLIENT_CONNECTIVITY_TIMEOUT (30*1000) // 30 seconds
++
+ static uint8_t zero_page[ZERO_BUF_SIZE] = {0};
+ 
+ enum {
+@@ -201,16 +203,20 @@ RedClient *main_channel_get_client_by_link_id(MainChannel *main_chan, uint32_t c
+ 
+ static int main_channel_client_push_ping(MainChannelClient *mcc, int size);
+ 
+-void main_channel_client_start_net_test(MainChannelClient *mcc)
++void main_channel_client_start_net_test(MainChannelClient *mcc, int test_rate)
+ {
+     if (!mcc || mcc->net_test_id) {
+         return;
+     }
+-    if (main_channel_client_push_ping(mcc, NET_TEST_WARMUP_BYTES)
+-        && main_channel_client_push_ping(mcc, 0)
+-        && main_channel_client_push_ping(mcc, NET_TEST_BYTES)) {
+-        mcc->net_test_id = mcc->ping_id - 2;
+-        mcc->net_test_stage = NET_TEST_STAGE_WARMUP;
++    if (test_rate) {
++        if (main_channel_client_push_ping(mcc, NET_TEST_WARMUP_BYTES)
++            && main_channel_client_push_ping(mcc, 0)
++            && main_channel_client_push_ping(mcc, NET_TEST_BYTES)) {
++            mcc->net_test_id = mcc->ping_id - 2;
++            mcc->net_test_stage = NET_TEST_STAGE_WARMUP;
++        }
++    } else {
++        red_channel_client_start_connectivity_monitoring(&mcc->base, CLIENT_CONNECTIVITY_TIMEOUT);
+     }
+ }
+ 
+@@ -970,6 +976,8 @@ static int main_channel_handle_parsed(RedChannelClient *rcc, uint32_t size, uint
+                     spice_printerr("net test: invalid values, latency %" PRIu64
+                                " roundtrip %" PRIu64 ". assuming high"
+                                "bandwidth", mcc->latency, roundtrip);
++                    red_channel_client_start_connectivity_monitoring(&mcc->base,
++                                                                     CLIENT_CONNECTIVITY_TIMEOUT);
+                     break;
+                 }
+                 mcc->bitrate_per_sec = (uint64_t)(NET_TEST_BYTES * 8) * 1000000
+@@ -980,6 +988,8 @@ static int main_channel_handle_parsed(RedChannelClient *rcc, uint32_t size, uint
+                            mcc->bitrate_per_sec,
+                            (double)mcc->bitrate_per_sec / 1024 / 1024,
+                            main_channel_client_is_low_bandwidth(mcc) ? " LOW BANDWIDTH" : "");
++                red_channel_client_start_connectivity_monitoring(&mcc->base,
++                                                                 CLIENT_CONNECTIVITY_TIMEOUT);
+                 break;
+             default:
+                 spice_printerr("invalid net test stage, ping id %d test id %d stage %d",
+@@ -989,6 +999,11 @@ static int main_channel_handle_parsed(RedChannelClient *rcc, uint32_t size, uint
+                 mcc->net_test_stage = NET_TEST_STAGE_INVALID;
+             }
+             break;
++        } else {
++            /*
++             * channel client monitors the connectivity using ping-pong messages
++             */
++            red_channel_client_handle_message(rcc, size, type, message);
+         }
+ #ifdef RED_STATISTICS
+         reds_update_stat_value(roundtrip);
+diff --git a/server/main_channel.h b/server/main_channel.h
+index 27367a4..29eb8d4 100644
+--- a/server/main_channel.h
++++ b/server/main_channel.h
+@@ -54,7 +54,7 @@ void main_channel_push_agent_disconnected(MainChannel *main_chan);
+ void main_channel_client_push_agent_tokens(MainChannelClient *mcc, uint32_t num_tokens);
+ void main_channel_client_push_agent_data(MainChannelClient *mcc, uint8_t* data, size_t len,
+                                          spice_marshaller_item_free_func free_data, void *opaque);
+-void main_channel_client_start_net_test(MainChannelClient *mcc);
++void main_channel_client_start_net_test(MainChannelClient *mcc, int test_rate);
+ // TODO: huge. Consider making a reds_* interface for these functions
+ // and calling from main.
+ void main_channel_push_init(MainChannelClient *mcc, int display_channels_hint,
+diff --git a/server/reds.c b/server/reds.c
+index f9f185d..7b7f262 100644
+--- a/server/reds.c
++++ b/server/reds.c
+@@ -1718,11 +1718,10 @@ static void reds_handle_main_link(RedLinkInfo *link)
+             main_channel_push_name(mcc, spice_name);
+         if (spice_uuid_is_set)
+             main_channel_push_uuid(mcc, spice_uuid);
+-
+-        main_channel_client_start_net_test(mcc);
+     } else {
+         reds_mig_target_client_add(client);
+     }
++    main_channel_client_start_net_test(mcc, !mig_target);
+ }
+ 
+ #define RED_MOUSE_STATE_TO_LOCAL(state)     \

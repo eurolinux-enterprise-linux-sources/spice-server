@@ -1,0 +1,62 @@
+From ee9d030362f63cecdd5eedfd3ee2d2e609fa2986 Mon Sep 17 00:00:00 2001
+From: Alon Levy <alevy@redhat.com>
+Date: Mon, 12 Aug 2013 19:48:24 +0300
+Subject: [PATCH] server: s/red_wait_all_sent/red_channel_wait_all_sent/
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1004443
+(cherry picked from commit 9b8ff0428468b7f081fe6f2b27774af2d0b4dadf)
+---
+ server/red_channel.c | 2 +-
+ server/red_channel.h | 2 +-
+ server/red_worker.c  | 6 +++---
+ 3 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/server/red_channel.c b/server/red_channel.c
+index 5cc63e3..76b2cd5 100644
+--- a/server/red_channel.c
++++ b/server/red_channel.c
+@@ -2388,7 +2388,7 @@ static void rcc_shutdown_if_pending_send(RedChannelClient *rcc)
+     }
+ }
+ 
+-void red_wait_all_sent(RedChannel *channel)
++void red_channel_wait_all_sent(RedChannel *channel)
+ {
+     uint64_t end_time;
+     uint32_t max_pipe_size;
+diff --git a/server/red_channel.h b/server/red_channel.h
+index 8fa44f1..676e1ef 100644
+--- a/server/red_channel.h
++++ b/server/red_channel.h
+@@ -620,6 +620,6 @@ void red_channel_client_wait_pipe_item_sent(RedChannelClient *rcc,
+ void red_wait_outgoing_item(RedChannelClient *rcc);
+ 
+ /* blocking function */
+-void red_wait_all_sent(RedChannel *channel);
++void red_channel_wait_all_sent(RedChannel *channel);
+ 
+ #endif
+diff --git a/server/red_worker.c b/server/red_worker.c
+index b3a957e..b93796c 100644
+--- a/server/red_worker.c
++++ b/server/red_worker.c
+@@ -11138,7 +11138,7 @@ static inline void red_cursor_reset(RedWorker *worker)
+         if (!worker->cursor_channel->common.during_target_migrate) {
+             red_pipes_add_verb(&worker->cursor_channel->common.base, SPICE_MSG_CURSOR_RESET);
+         }
+-        red_wait_all_sent(&worker->cursor_channel->common.base);
++        red_channel_wait_all_sent(&worker->cursor_channel->common.base);
+     }
+ }
+ 
+@@ -11421,8 +11421,8 @@ void handle_dev_stop(void *opaque, void *payload)
+      * purge the pipe, send destroy_all_surfaces
+      * to the client (there is no such message right now), and start
+      * from scratch on the destination side */
+-    red_wait_all_sent(&worker->display_channel->common.base);
+-    red_wait_all_sent(&worker->cursor_channel->common.base);
++    red_channel_wait_all_sent(&worker->display_channel->common.base);
++    red_channel_wait_all_sent(&worker->cursor_channel->common.base);
+ }
+ 
+ static int display_channel_wait_for_migrate_data(DisplayChannel *display)

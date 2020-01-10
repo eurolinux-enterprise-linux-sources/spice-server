@@ -1,0 +1,46 @@
+From 269e9d112639ab6c54645de217c46ef75617d780 Mon Sep 17 00:00:00 2001
+From: Frediano Ziglio <fziglio@redhat.com>
+Date: Wed, 9 Sep 2015 12:45:06 +0100
+Subject: [PATCH 2/2] worker: avoid double free or double create of surfaces
+
+A driver can overwrite surface state creating a surface with the same
+id of a previous one.
+Also can try to destroy surfaces that are not created.
+Both requests cause invalid internal states that could lead to crashes
+or memory corruptions.
+
+Signed-off-by: Frediano Ziglio <fziglio@redhat.com>
+---
+ server/red_worker.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/server/red_worker.c b/server/red_worker.c
+index c62dbcb..a7eaab9 100644
+--- a/server/red_worker.c
++++ b/server/red_worker.c
+@@ -4320,6 +4320,10 @@ static inline void red_process_surface(RedWorker *worker, RedSurfaceCmd *surface
+         int32_t stride = surface->u.surface_create.stride;
+         int reloaded_surface = loadvm || (surface->flags & QXL_SURF_FLAG_KEEP_DATA);
+ 
++        if (red_surface->refs) {
++            spice_warning("avoiding creating a surface twice");
++            break;
++        }
+         data = surface->u.surface_create.data;
+         if (stride < 0) {
+             data -= (int32_t)(stride * (height - 1));
+@@ -4333,7 +4337,10 @@ static inline void red_process_surface(RedWorker *worker, RedSurfaceCmd *surface
+         break;
+     }
+     case QXL_SURFACE_CMD_DESTROY:
+-        spice_warn_if(!red_surface->context.canvas);
++        if (!red_surface->refs) {
++            spice_warning("avoiding destroying a surface twice");
++            break;
++        }
+         set_surface_release_info(worker, surface_id, 0, surface->release_info, group_id);
+         red_handle_depends_on_target_surface(worker, surface_id);
+         /* note that red_handle_depends_on_target_surface must be called before red_current_clear.
+-- 
+2.4.3
+

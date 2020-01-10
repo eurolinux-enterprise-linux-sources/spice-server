@@ -1,0 +1,82 @@
+From e612f6607a15882ec21df4ff2f7cda497b6de9ce Mon Sep 17 00:00:00 2001
+From: Yonit Halperin <yhalperi@redhat.com>
+Date: Wed, 11 Sep 2013 15:02:23 -0400
+Subject: [PATCH] red_worker: disconnect the channel instead of shutdown in
+ case of a blocking method failure
+
+The methods that trigger waitings on the client pipe require that
+the waiting will succeed in order to continue, or otherwise, that
+all the living pipe items will be released (e.g., when
+we must destroy a surface, we need that all its related pipe items will
+be released). Shutdown of the socket will eventually trigger
+red_channel_client_disconnect (*), which will empty the pipe. However,
+if the blocking method failed, we need to empty the pipe synchronously.
+It is not safe(**) to call red_channel_client_disconnect from ChannelCbs
+, but all the blocking calls in red_worker are done from callbacks that
+are triggered from the device.
+To summarize, calling red_channel_client_disconnect instead of calling
+red_channel_client_shutdown will immediately release all the pipe items that are
+held by the channel client (by calling red_channel_client_pipe_clear).
+If red_clear_surface_drawables_from_pipe timeouts,
+red_channel_client_disconnect will make sure that the surface we wish to
+release is not referenced by any pipe-item.
+
+(*) After a shutdown of a socket, we expect that later, when
+red_peer_handle_incoming is called, it will encounter a socket
+error and will call the channel's on_error callback which calls
+red_channel_client_disconnect.
+
+(**) I believe it was not safe before commit 2d2121a17038bc0 (before adding ref
+count to ChannelClient). However, I think it might still be unsafe, because
+red_channel_client_disconnect sets rcc->stream to NULL, and rcc->stream
+may be referred later inside a red_channel_client method unsafely. So instead
+of checking if (stream != NULL) after calling callbacks, we try to avoid
+calling red_channel_client_disconnect from callbacks.
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1004443
+(cherry picked from commit 90a4761249f84421b27d67a85262b1423b24fe04)
+---
+ server/red_worker.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/server/red_worker.c b/server/red_worker.c
+index 31f3cbb..7a1c2d9 100644
+--- a/server/red_worker.c
++++ b/server/red_worker.c
+@@ -11137,10 +11137,10 @@ void handle_dev_destroy_surface_wait(void *opaque, void *payload)
+     dev_destroy_surface_wait(worker, msg->surface_id);
+ }
+ 
+-static void rcc_shutdown_if_pending_send(RedChannelClient *rcc)
++static void rcc_disconnect_if_pending_send(RedChannelClient *rcc)
+ {
+     if (red_channel_client_blocked(rcc) || rcc->pipe_size > 0) {
+-        red_channel_client_shutdown(rcc);
++        red_channel_client_disconnect(rcc);
+     } else {
+         spice_assert(red_channel_client_no_item_being_sent(rcc));
+     }
+@@ -11166,7 +11166,7 @@ static inline void red_cursor_reset(RedWorker *worker)
+         if (!red_channel_wait_all_sent(&worker->cursor_channel->common.base,
+                                        DISPLAY_CLIENT_TIMEOUT)) {
+             red_channel_apply_clients(&worker->cursor_channel->common.base,
+-                                      rcc_shutdown_if_pending_send);
++                                      rcc_disconnect_if_pending_send);
+         }
+     }
+ }
+@@ -11453,12 +11453,12 @@ void handle_dev_stop(void *opaque, void *payload)
+     if (!red_channel_wait_all_sent(&worker->display_channel->common.base,
+                                    DISPLAY_CLIENT_TIMEOUT)) {
+         red_channel_apply_clients(&worker->display_channel->common.base,
+-                                  rcc_shutdown_if_pending_send);
++                                  rcc_disconnect_if_pending_send);
+     }
+     if (!red_channel_wait_all_sent(&worker->cursor_channel->common.base,
+                                    DISPLAY_CLIENT_TIMEOUT)) {
+         red_channel_apply_clients(&worker->cursor_channel->common.base,
+-                                  rcc_shutdown_if_pending_send);
++                                  rcc_disconnect_if_pending_send);
+     }
+ }
+ 

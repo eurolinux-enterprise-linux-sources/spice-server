@@ -1,0 +1,28 @@
+From 9d0a65c248b745125e37f6823157ffb72b24b31f Mon Sep 17 00:00:00 2001
+From: Frediano Ziglio <fziglio@redhat.com>
+Date: Tue, 8 Sep 2015 10:27:48 +0100
+Subject: [PATCH 48/53] Check red_get_data_chunks_ptr returns success in
+ red_get_path
+
+Signed-off-by: Frediano Ziglio <fziglio@redhat.com>
+---
+ server/red_parse_qxl.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/server/red_parse_qxl.c b/server/red_parse_qxl.c
+index bd0c408..53cb39c 100644
+--- a/server/red_parse_qxl.c
++++ b/server/red_parse_qxl.c
+@@ -248,6 +248,9 @@ static SpicePath *red_get_path(RedMemSlotInfo *slots, int group_id,
+     size = red_get_data_chunks_ptr(slots, group_id,
+                                    get_memslot_id(slots, addr),
+                                    &chunks, &qxl->chunk);
++    if (size == 0) {
++        return NULL;
++    }
+     data = red_linearize_chunk(&chunks, size, &free_data);
+     red_put_data_chunks(&chunks);
+ 
+-- 
+2.4.3
+
