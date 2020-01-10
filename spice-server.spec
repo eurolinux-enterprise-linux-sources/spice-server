@@ -3,7 +3,7 @@
 
 Name:           spice-server
 Version:        0.12.4
-Release:        16%{?dist}.1
+Release:        16%{?dist}.2
 Summary:        Implements the server side of the SPICE protocol
 Group:          System Environment/Libraries
 License:        LGPLv2+
@@ -75,6 +75,9 @@ Patch63: 0063-Prevent-possible-DoS-attempts-during-protocol-handsh.patch
 Patch64: 0064-Prevent-integer-overflows-in-capability-checks.patch
 Patch65: 0065-main-channel-Prevent-overflow-reading-messages-from-.patch
 Patch66: 0066-Fix-flexible-array-buffer-overflow.patch
+Patch67: 0067-reds-Disconnect-when-receiving-overly-big-ClientMoni.patch
+Patch68: 0068-reds-Avoid-integer-overflows-handling-monitor-config.patch
+Patch69: 0069-reds-Avoid-buffer-overflows-handling-monitor-configu.patch
 
 
 Source100:      pyparsing.py
@@ -203,6 +206,9 @@ using %{name}, you will need to install %{name}-devel.
 %patch64 -p1
 %patch65 -p1
 %patch66 -p1
+%patch67 -p1
+%patch68 -p1
+%patch69 -p1
 
 
 # no point of calling git-version-gen for spice-common and also
@@ -252,6 +258,11 @@ rm -rf $RPM_BUILD_ROOT
 
 
 %changelog
+* Mon Oct 15 2018 Christophe Fergeau <cfergeau@redhat.com> - 0.12.4-16.2
+- Prevent potential buffer/integer overflows with invalid MonitorsConfig messages
+  sent from an authenticated client
+  Resolves: CVE-2017-7506
+
 * Fri Aug 10 2018 Frediano Ziglio <fziglio@redhat.com> - 0.12.4-16.1
 - Fix flexible array buffer overflow
   Resolves: rhbz#1596008
