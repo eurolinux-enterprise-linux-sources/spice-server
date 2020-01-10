@@ -3,7 +3,7 @@
 
 Name:           spice-server
 Version:        0.12.4
-Release:        16%{?dist}.2
+Release:        16%{?dist}.3
 Summary:        Implements the server side of the SPICE protocol
 Group:          System Environment/Libraries
 License:        LGPLv2+
@@ -78,6 +78,7 @@ Patch66: 0066-Fix-flexible-array-buffer-overflow.patch
 Patch67: 0067-reds-Disconnect-when-receiving-overly-big-ClientMoni.patch
 Patch68: 0068-reds-Avoid-integer-overflows-handling-monitor-config.patch
 Patch69: 0069-reds-Avoid-buffer-overflows-handling-monitor-configu.patch
+Patch70: 0070-memslot-Fix-off-by-one-error-in-group-slot-boundary-.patch
 
 
 Source100:      pyparsing.py
@@ -209,6 +210,7 @@ using %{name}, you will need to install %{name}-devel.
 %patch67 -p1
 %patch68 -p1
 %patch69 -p1
+%patch70 -p1
 
 
 # no point of calling git-version-gen for spice-common and also
@@ -258,6 +260,10 @@ rm -rf $RPM_BUILD_ROOT
 
 
 %changelog
+* Thu Jan 24 2019 Christophe Fergeau <cfergeau@redhat.com> - 0.12.4-16.3
+- Fix off-by-one error during guest-to-host memory address conversion
+  Resolves: CVE-2019-3813
+
 * Mon Oct 15 2018 Christophe Fergeau <cfergeau@redhat.com> - 0.12.4-16.2
 - Prevent potential buffer/integer overflows with invalid MonitorsConfig messages
   sent from an authenticated client
