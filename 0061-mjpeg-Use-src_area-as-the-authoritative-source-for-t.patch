@@ -1,0 +1,87 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Francois Gouget <fgouget@codeweavers.com>
+Date: Tue, 24 May 2016 17:25:58 +0200
+Subject: [PATCH] mjpeg: Use src_area as the authoritative source for the frame
+ dimensions
+
+Video frames correspond to QXL_DRAW_COPY operations where the frame area
+is defined by the SpiceCopy.src_area field.
+
+Signed-off-by: Francois Gouget <fgouget@codeweavers.com>
+(cherry picked from commit 032cb0ce85b44da3ee5d0308909164452e25bff5)
+---
+ server/mjpeg_encoder.c | 14 +++++++-------
+ server/mjpeg_encoder.h |  5 +++--
+ server/red_worker.c    |  2 +-
+ 3 files changed, 11 insertions(+), 10 deletions(-)
+
+diff --git a/server/mjpeg_encoder.c b/server/mjpeg_encoder.c
+index 223fe64..02d4420 100644
+--- a/server/mjpeg_encoder.c
++++ b/server/mjpeg_encoder.c
+@@ -729,8 +729,9 @@ static void mjpeg_encoder_adjust_fps(MJpegEncoder *encoder, uint64_t now)
+     }
+ }
+ 
+-int mjpeg_encoder_start_frame(MJpegEncoder *encoder, SpiceBitmapFmt format,
+-                              int width, int height,
++int mjpeg_encoder_start_frame(MJpegEncoder *encoder,
++                              SpiceBitmapFmt format,
++                              const SpiceRect *src,
+                               uint8_t **dest, size_t *dest_len,
+                               uint32_t frame_mm_time)
+ {
+@@ -803,10 +804,12 @@ int mjpeg_encoder_start_frame(MJpegEncoder *encoder, SpiceBitmapFmt format,
+         return MJPEG_ENCODER_FRAME_UNSUPPORTED;
+     }
+ 
++    encoder->cinfo.image_width = src->right - src->left;
++    encoder->cinfo.image_height = src->bottom - src->top;
+     if (encoder->pixel_converter != NULL) {
+-        unsigned int stride = width * 3;
++        JDIMENSION stride = encoder->cinfo.image_width * 3;
+         /* check for integer overflow */
+-        if (stride < width) {
++        if (stride < encoder->cinfo.image_width) {
+             return MJPEG_ENCODER_FRAME_UNSUPPORTED;
+         }
+         if (encoder->row_size < stride) {
+@@ -816,9 +819,6 @@ int mjpeg_encoder_start_frame(MJpegEncoder *encoder, SpiceBitmapFmt format,
+     }
+ 
+     spice_jpeg_mem_dest(&encoder->cinfo, dest, dest_len);
+-
+-    encoder->cinfo.image_width      = width;
+-    encoder->cinfo.image_height     = height;
+     jpeg_set_defaults(&encoder->cinfo);
+     encoder->cinfo.dct_method       = JDCT_IFAST;
+     quality = mjpeg_quality_samples[encoder->rate_control.quality_id];
+diff --git a/server/mjpeg_encoder.h b/server/mjpeg_encoder.h
+index 741ea1c..c85ed99 100644
+--- a/server/mjpeg_encoder.h
++++ b/server/mjpeg_encoder.h
+@@ -66,8 +66,9 @@ uint8_t mjpeg_encoder_get_bytes_per_pixel(MJpegEncoder *encoder);
+  *  MJPEG_ENCODER_FRAME_ENCODE_START: frame encoding started. Continue with
+  *                                    mjpeg_encoder_encode_scanline.
+  */
+-int mjpeg_encoder_start_frame(MJpegEncoder *encoder, SpiceBitmapFmt format,
+-                              int width, int height,
++int mjpeg_encoder_start_frame(MJpegEncoder *encoder,
++                              SpiceBitmapFmt format,
++                              const SpiceRect *src,
+                               uint8_t **dest, size_t *dest_len,
+                               uint32_t frame_mm_time);
+ int mjpeg_encoder_encode_scanline(MJpegEncoder *encoder, uint8_t *src_pixels,
+diff --git a/server/red_worker.c b/server/red_worker.c
+index fd9da5e..0d919e1 100644
+--- a/server/red_worker.c
++++ b/server/red_worker.c
+@@ -8633,7 +8633,7 @@ static inline int red_marshall_stream_data(RedChannelClient *rcc,
+     outbuf_size = dcc->send_data.stream_outbuf_size;
+     ret = mjpeg_encoder_start_frame(agent->mjpeg_encoder,
+                                     copy->src_bitmap->u.bitmap.format,
+-                                    width, height,
++                                    &copy->src_area,
+                                     &dcc->send_data.stream_outbuf,
+                                     &outbuf_size,
+                                     frame_mm_time);

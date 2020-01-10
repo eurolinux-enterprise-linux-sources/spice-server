@@ -3,7 +3,7 @@
 
 Name:           spice-server
 Version:        0.12.4
-Release:        13%{?dist}.2
+Release:        16%{?dist}
 Summary:        Implements the server side of the SPICE protocol
 Group:          System Environment/Libraries
 License:        LGPLv2+
@@ -67,9 +67,13 @@ Patch55: 0055-smartcard-add-a-ref-to-item-before-adding-to-pipe.patch
 Patch56: 0056-smartcard-allocate-msg-with-the-expected-size.patch
 Patch57: 0057-create-a-function-to-validate-surface-parameters.patch
 Patch58: 0058-improve-primary-surface-parameter-checks.patch
-Patch59: 0059-Prevent-possible-DoS-attempts-during-protocol-handsh.patch
-Patch60: 0060-Prevent-integer-overflows-in-capability-checks.patch
-Patch61: 0061-main-channel-Prevent-overflow-reading-messages-from-.patch
+Patch59: 0059-streaming-Rework-red_marshall_stream_data-a-bit.patch
+Patch60: 0060-streaming-Remove-the-Drawable.sized_stream-field.patch
+Patch61: 0061-mjpeg-Use-src_area-as-the-authoritative-source-for-t.patch
+Patch62: 0062-red-channel-make-red_client_-ref-unref-thread-safe.patch
+Patch63: 0063-Prevent-possible-DoS-attempts-during-protocol-handsh.patch
+Patch64: 0064-Prevent-integer-overflows-in-capability-checks.patch
+Patch65: 0065-main-channel-Prevent-overflow-reading-messages-from-.patch
 
 
 Source100:      pyparsing.py
@@ -193,6 +197,10 @@ using %{name}, you will need to install %{name}-devel.
 %patch59 -p1
 %patch60 -p1
 %patch61 -p1
+%patch62 -p1
+%patch63 -p1
+%patch64 -p1
+%patch65 -p1
 
 
 # no point of calling git-version-gen for spice-common and also
@@ -242,14 +250,20 @@ rm -rf $RPM_BUILD_ROOT
 
 
 %changelog
-* Fri Dec 09 2016 Frediano Ziglio <fziglio@redhat.com> - 0.12.4-13.2
+* Fri Dec 09 2016 Frediano Ziglio <fziglio@redhat.com> - 0.12.4-16
 - Fix buffer overflow in main_channel_alloc_msg_rcv_buf when reading large
   messages.
   Resolves: CVE-2016-9577
 - Fix remote DoS via crafted message.
   Resolves: CVE-2016-9578
 
-* Tue Apr 26 2016 Christophe Fergeau <cfergeau@redhat.com> - 0.12.4-13.1
+* Tue Sep  6 2016 Victor Toso <victortoso@redhat.com> - 0.12.4-15
+- Avoid spice assertion when changing sized stream
+  Resolves: rhbz#1274575
+- Make red_client_{ref,unref} thread safe to avoid crash
+  Resolves: rhbz#1361946
+
+* Tue Apr 26 2016 Christophe Fergeau <cfergeau@redhat.com> - 0.12.4-14
 - Fix heap-based memory corruption within smartcard handling
   Resolves: CVE-2016-0749
 - Fix host memory access from guest with invalid primary surface parameters

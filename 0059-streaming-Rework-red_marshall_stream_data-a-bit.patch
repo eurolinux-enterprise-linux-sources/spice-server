@@ -1,0 +1,93 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Francois Gouget <fgouget@codeweavers.com>
+Date: Fri, 10 Jun 2016 12:39:24 +0200
+Subject: [PATCH] streaming: Rework red_marshall_stream_data a bit
+
+This code just refactors the function without doing any functional
+changes. The actual changes will be in the next commit, and this will
+make the next commit much more obvious.
+
+(cherry picked from commit 28f2e425c4e9d86570970d49a7a3eee43e24134e)
+---
+ server/red_worker.c | 35 +++++++++++++++++------------------
+ 1 file changed, 17 insertions(+), 18 deletions(-)
+
+diff --git a/server/red_worker.c b/server/red_worker.c
+index e38d441..e273a1d 100644
+--- a/server/red_worker.c
++++ b/server/red_worker.c
+@@ -8607,11 +8607,11 @@ static inline int red_marshall_stream_data(RedChannelClient *rcc,
+     DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
+     DisplayChannel *display_channel = SPICE_CONTAINEROF(rcc->channel, DisplayChannel, common.base);
+     Stream *stream = drawable->stream;
+-    SpiceImage *image;
++    SpiceCopy *copy;
+     RedWorker *worker = dcc->common.worker;
+     uint32_t frame_mm_time;
+     int n;
+-    int width, height;
++    int is_sized, width, height;
+     int ret;
+ 
+     if (!stream) {
+@@ -8621,22 +8621,20 @@ static inline int red_marshall_stream_data(RedChannelClient *rcc,
+     spice_assert(drawable->red_drawable->type == QXL_DRAW_COPY);
+ 
+     worker = display_channel->common.worker;
+-    image = drawable->red_drawable->u.copy.src_bitmap;
+ 
+-    if (image->descriptor.type != SPICE_IMAGE_TYPE_BITMAP) {
++    copy = &drawable->red_drawable->u.copy;
++    if (copy->src_bitmap->descriptor.type != SPICE_IMAGE_TYPE_BITMAP) {
+         return FALSE;
+     }
+ 
+-    if (drawable->sized_stream) {
+-        if (red_channel_client_test_remote_cap(rcc, SPICE_DISPLAY_CAP_SIZED_STREAM)) {
+-            SpiceRect *src_rect = &drawable->red_drawable->u.copy.src_area;
+-
+-            width = src_rect->right - src_rect->left;
+-            height = src_rect->bottom - src_rect->top;
+-        } else {
+-            return FALSE;
+-        }
+-    } else {
++    width = copy->src_area.right - copy->src_area.left;
++    height = copy->src_area.bottom - copy->src_area.top;
++    is_sized = (drawable->sized_stream != NULL);
++    if (is_sized &&
++        !red_channel_client_test_remote_cap(rcc, SPICE_DISPLAY_CAP_SIZED_STREAM)) {
++        return FALSE;
++    }
++    if (!is_sized) {
+         width = stream->width;
+         height = stream->height;
+     }
+@@ -8660,7 +8658,8 @@ static inline int red_marshall_stream_data(RedChannelClient *rcc,
+                         drawable->red_drawable->mm_time :
+                         reds_get_mm_time();
+     outbuf_size = dcc->send_data.stream_outbuf_size;
+-    ret = mjpeg_encoder_start_frame(agent->mjpeg_encoder, image->u.bitmap.format,
++    ret = mjpeg_encoder_start_frame(agent->mjpeg_encoder,
++                                    copy->src_bitmap->u.bitmap.format,
+                                     width, height,
+                                     &dcc->send_data.stream_outbuf,
+                                     &outbuf_size,
+@@ -8681,14 +8680,14 @@ static inline int red_marshall_stream_data(RedChannelClient *rcc,
+         return FALSE;
+     }
+ 
+-    if (!encode_frame(dcc, &drawable->red_drawable->u.copy.src_area,
+-                      &image->u.bitmap, stream)) {
++    if (!encode_frame(dcc, &copy->src_area,
++                      &copy->src_bitmap->u.bitmap, stream)) {
+         return FALSE;
+     }
+     n = mjpeg_encoder_end_frame(agent->mjpeg_encoder);
+     dcc->send_data.stream_outbuf_size = outbuf_size;
+ 
+-    if (!drawable->sized_stream) {
++    if (!is_sized) {
+         SpiceMsgDisplayStreamData stream_data;
+ 
+         red_channel_client_init_send_data(rcc, SPICE_MSG_DISPLAY_STREAM_DATA, NULL);

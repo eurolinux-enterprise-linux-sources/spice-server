@@ -1,0 +1,143 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Francois Gouget <fgouget@codeweavers.com>
+Date: Fri, 10 Jun 2016 12:43:12 +0200
+Subject: [PATCH] streaming: Remove the Drawable.sized_stream field
+
+Only red_marshall_stream_data() needs to know whether to send the frame
+using a SpiceMsgDisplayStreamDataSized or a regular StreamData message.
+So check whether we have a sized frame there and simplify the rest of
+the code.
+
+Signed-off-by: Francois Gouget <fgouget@codeweavers.com>
+(cherry picked from commit 42a5794845d0ee4b34ac523b8ad5a6c453d2203c)
+---
+ server/red_worker.c | 39 ++++++---------------------------------
+ 1 file changed, 6 insertions(+), 33 deletions(-)
+
+diff --git a/server/red_worker.c b/server/red_worker.c
+index e273a1d..fd9da5e 100644
+--- a/server/red_worker.c
++++ b/server/red_worker.c
+@@ -855,7 +855,6 @@ struct Drawable {
+     int gradual_frames_count;
+     int last_gradual_frame;
+     Stream *stream;
+-    Stream *sized_stream;
+     int streamable;
+     BitmapGradualType copy_bitmap_graduality;
+     uint32_t group_id;
+@@ -2552,9 +2551,6 @@ static inline void red_detach_stream(RedWorker *worker, Stream *stream, int deta
+     spice_assert(stream->current && stream->current->stream);
+     spice_assert(stream->current->stream == stream);
+     stream->current->stream = NULL;
+-    if (detach_sized) {
+-        stream->current->sized_stream = NULL;
+-    }
+     stream->current = NULL;
+ }
+ 
+@@ -2750,13 +2746,11 @@ static inline void red_display_detach_stream_gracefully(DisplayChannelClient *dc
+         /* (1) The caller should detach the drawable from the stream. This will
+          * lead to sending the drawable losslessly, as an ordinary drawable. */
+         if (red_display_drawable_is_in_pipe(dcc, stream->current)) {
+-            spice_debug("stream %d: upgrade by linked drawable. sized %d, box ==>",
+-                        stream_id, stream->current->sized_stream != NULL);
++            spice_debug("stream %d: upgrade by linked drawable. box ==>", stream_id);
+             rect_debug(&stream->current->red_drawable->bbox);
+             goto clear_vis_region;
+         }
+-        spice_debug("stream %d: upgrade by drawable. sized %d, box ==>",
+-                    stream_id, stream->current->sized_stream != NULL);
++        spice_debug("stream %d: upgrade by drawable. box ==>", stream_id);
+         rect_debug(&stream->current->red_drawable->bbox);
+         rcc = &dcc->common.base;
+         channel = rcc->channel;
+@@ -3250,7 +3244,6 @@ static inline int __red_is_next_stream_frame(RedWorker *worker,
+                                              int container_candidate_allowed)
+ {
+     RedDrawable *red_drawable;
+-    int is_frame_container = FALSE;
+ 
+     if (!candidate->streamable) {
+         return STREAM_FRAME_NONE;
+@@ -3289,9 +3282,6 @@ static inline int __red_is_next_stream_frame(RedWorker *worker,
+                 return STREAM_FRAME_NONE;
+             }
+ 
+-            if (candidate_area > other_area) {
+-                is_frame_container = TRUE;
+-            }
+         } else {
+             return STREAM_FRAME_NONE;
+         }
+@@ -3303,11 +3293,7 @@ static inline int __red_is_next_stream_frame(RedWorker *worker,
+             return STREAM_FRAME_NONE;
+         }
+     }
+-    if (is_frame_container) {
+-        return STREAM_FRAME_CONTAINER;
+-    } else {
+-        return STREAM_FRAME_NATIVE;
+-    }
++    return STREAM_FRAME_NATIVE;
+ }
+ 
+ static inline int red_is_next_stream_frame(RedWorker *worker, const Drawable *candidate,
+@@ -3484,9 +3470,6 @@ static inline void red_stream_maintenance(RedWorker *worker, Drawable *candidate
+             red_detach_stream(worker, stream, FALSE);
+             prev->streamable = FALSE; //prevent item trace
+             red_attach_stream(worker, candidate, stream);
+-            if (is_next_frame == STREAM_FRAME_CONTAINER) {
+-                candidate->sized_stream = stream;
+-            }
+         }
+     } else {
+         if (red_is_next_stream_frame(worker, candidate, prev) != STREAM_FRAME_NONE) {
+@@ -3637,9 +3620,6 @@ static inline void red_use_stream_trace(RedWorker *worker, Drawable *drawable)
+                 red_detach_stream(worker, stream, FALSE);
+             }
+             red_attach_stream(worker, drawable, stream);
+-            if (is_next_frame == STREAM_FRAME_CONTAINER) {
+-                drawable->sized_stream = stream;
+-            }
+             return;
+         }
+         item = ring_next(ring, item);
+@@ -8614,10 +8594,6 @@ static inline int red_marshall_stream_data(RedChannelClient *rcc,
+     int is_sized, width, height;
+     int ret;
+ 
+-    if (!stream) {
+-        spice_assert(drawable->sized_stream);
+-        stream = drawable->sized_stream;
+-    }
+     spice_assert(drawable->red_drawable->type == QXL_DRAW_COPY);
+ 
+     worker = display_channel->common.worker;
+@@ -8629,15 +8605,12 @@ static inline int red_marshall_stream_data(RedChannelClient *rcc,
+ 
+     width = copy->src_area.right - copy->src_area.left;
+     height = copy->src_area.bottom - copy->src_area.top;
+-    is_sized = (drawable->sized_stream != NULL);
++    is_sized = (width != stream->width) || (height != stream->height) ||
++               !rect_is_equal(&drawable->red_drawable->bbox, &stream->dest_area);
+     if (is_sized &&
+         !red_channel_client_test_remote_cap(rcc, SPICE_DISPLAY_CAP_SIZED_STREAM)) {
+         return FALSE;
+     }
+-    if (!is_sized) {
+-        width = stream->width;
+-        height = stream->height;
+-    }
+ 
+     StreamAgent *agent = &dcc->stream_agents[get_stream_id(worker, stream)];
+     uint64_t time_now = red_now();
+@@ -8734,7 +8707,7 @@ static inline void marshall_qxl_drawable(RedChannelClient *rcc,
+     spice_assert(display_channel && rcc);
+     /* allow sized frames to be streamed, even if they where replaced by another frame, since
+      * newer frames might not cover sized frames completely if they are bigger */
+-    if ((item->stream || item->sized_stream) && red_marshall_stream_data(rcc, m, item)) {
++    if (item->stream && red_marshall_stream_data(rcc, m, item)) {
+         return;
+     }
+     if (!display_channel->enable_jpeg)

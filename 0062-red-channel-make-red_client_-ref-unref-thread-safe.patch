@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Frediano Ziglio <fziglio@redhat.com>
+Date: Tue, 12 Apr 2016 16:28:07 +0100
+Subject: [PATCH] red-channel: make red_client_{ref,unref} thread safe
+
+These function are called on both sides of dispatcher so the
+increment/decrement of the counter is done in multiple threads.
+This caused the counter to not get incremented correctly and
+freed the structure too early, leaving a dangling pointer in
+the other thread.
+
+This fixes https://bugzilla.redhat.com/show_bug.cgi?id=1253375.
+
+Signed-off-by: Frediano Ziglio <fziglio@redhat.com>
+Acked-by: Christophe Fergeau <cfergeau@redhat.com>
+Acked-by: Jonathon Jongsma <jjongsma@redhat.com>
+(cherry picked from commit b3aebf913623ed4c8cb7eb03380c0f3f2b7c42d6)
+---
+ server/red_channel.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/server/red_channel.c b/server/red_channel.c
+index 5df8f14..55442d6 100644
+--- a/server/red_channel.c
++++ b/server/red_channel.c
+@@ -30,6 +30,7 @@
+ #include <unistd.h>
+ #include <errno.h>
+ #include <sys/ioctl.h>
++#include <glib.h>
+ 
+ #include "common/generated_server_marshallers.h"
+ #include "common/ring.h"
+@@ -2060,13 +2061,13 @@ RedClient *red_client_new(int migrated)
+ RedClient *red_client_ref(RedClient *client)
+ {
+     spice_assert(client);
+-    client->refs++;
++    g_atomic_int_inc(&client->refs);
+     return client;
+ }
+ 
+ RedClient *red_client_unref(RedClient *client)
+ {
+-    if (!--client->refs) {
++    if (g_atomic_int_dec_and_test(&client->refs)) {
+         spice_debug("release client=%p", client);
+         pthread_mutex_destroy(&client->lock);
+         free(client);
