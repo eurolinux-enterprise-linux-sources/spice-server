@@ -3,7 +3,7 @@
 
 Name:           spice-server
 Version:        0.12.4
-Release:        16%{?dist}
+Release:        16%{?dist}.1
 Summary:        Implements the server side of the SPICE protocol
 Group:          System Environment/Libraries
 License:        LGPLv2+
@@ -74,6 +74,7 @@ Patch62: 0062-red-channel-make-red_client_-ref-unref-thread-safe.patch
 Patch63: 0063-Prevent-possible-DoS-attempts-during-protocol-handsh.patch
 Patch64: 0064-Prevent-integer-overflows-in-capability-checks.patch
 Patch65: 0065-main-channel-Prevent-overflow-reading-messages-from-.patch
+Patch66: 0066-Fix-flexible-array-buffer-overflow.patch
 
 
 Source100:      pyparsing.py
@@ -201,6 +202,7 @@ using %{name}, you will need to install %{name}-devel.
 %patch63 -p1
 %patch64 -p1
 %patch65 -p1
+%patch66 -p1
 
 
 # no point of calling git-version-gen for spice-common and also
@@ -250,6 +252,10 @@ rm -rf $RPM_BUILD_ROOT
 
 
 %changelog
+* Fri Aug 10 2018 Frediano Ziglio <fziglio@redhat.com> - 0.12.4-16.1
+- Fix flexible array buffer overflow
+  Resolves: rhbz#1596008
+
 * Fri Dec 09 2016 Frediano Ziglio <fziglio@redhat.com> - 0.12.4-16
 - Fix buffer overflow in main_channel_alloc_msg_rcv_buf when reading large
   messages.
